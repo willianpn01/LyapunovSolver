@@ -20,6 +20,9 @@ In this formulation:
 """
 
 from typing import Dict, List, Optional, Tuple
+from functools import lru_cache
+import time
+import logging
 import sympy as sp
 from sympy import (
     Symbol, Expr, symbols, expand, simplify, collect,
@@ -29,6 +32,25 @@ from sympy import (
 )
 
 from .system_definition import SystemDefinition, SystemProperty
+
+
+logger = logging.getLogger(__name__)
+
+
+def _format_time(seconds: float) -> str:
+    """Format seconds into human-readable string."""
+    if seconds < 1:
+        return f"{seconds*1000:.1f}ms"
+    elif seconds < 60:
+        return f"{seconds:.2f}s"
+    elif seconds < 3600:
+        mins = int(seconds // 60)
+        secs = seconds % 60
+        return f"{mins}m {secs:.1f}s"
+    else:
+        hours = int(seconds // 3600)
+        mins = int((seconds % 3600) // 60)
+        return f"{hours}h {mins}m"
 
 
 class SymbolicEngine:
@@ -70,6 +92,10 @@ class SymbolicEngine:
         
         self._F: Dict[int, Expr] = {}
         self._h: Dict[int, List[Expr]] = {}
+        
+        self._Z_cache: Dict[int, Expr] = {}
+        self._S_cache: Dict[int, Expr] = {}
+        self._K_cache: Dict[Tuple[int, int], Expr] = {}
         
         self._extract_coefficients()
         self._F[2] = self._x * self._y / 2
@@ -121,7 +147,11 @@ class SymbolicEngine:
         Z[j] = a[j]*((x + y)/2)^j + b[j]*((x - y)/(2*I))^j
         
         where x, y are complex coordinates.
+        Cached for performance.
         """
+        if j in self._Z_cache:
+            return self._Z_cache[j]
+        
         if j < 2 or j >= self.max_order:
             return S.Zero
         
@@ -129,6 +159,7 @@ class SymbolicEngine:
         b_j = self._b.get(j, S.Zero)
         
         if a_j == 0 and b_j == 0:
+            self._Z_cache[j] = S.Zero
             return S.Zero
         
         x, y = self._x, self._y
@@ -136,7 +167,9 @@ class SymbolicEngine:
         term1 = a_j * ((x + y) / 2) ** j
         term2 = b_j * ((x - y) / (2 * I)) ** j
         
-        return expand(term1 + term2)
+        result = expand(term1 + term2)
+        self._Z_cache[j] = result
+        return result
     
     def _get_F(self, l: int) -> Expr:
         """Get F[l], computing if necessary."""
@@ -173,15 +206,24 @@ class SymbolicEngine:
     def _S(self, p: int) -> Expr:
         """
         S[p] = Sum[Phi[p - i + 1, i], {i, 2, p - 1}]
+        Cached for performance.
         """
+        if p in self._S_cache:
+            return self._S_cache[p]
+        
+        start = time.time()
         result = S.Zero
         
         for i in range(2, p):
             l = p - i + 1
             phi = self._Phi(l, i)
-            result = result + phi
+            if phi != 0:
+                result = result + phi
         
-        return expand(result)
+        result = expand(result)
+        self._S_cache[p] = result
+        logger.debug(f"  S[{p}] computed in {_format_time(time.time() - start)}")
+        return result
     
     def _get_coeff(self, expr: Expr, x_pow: int, y_pow: int) -> Expr:
         """Extract coefficient of x^x_pow * y^y_pow from expr."""
@@ -212,33 +254,48 @@ class SymbolicEngine:
     def _K(self, p: int, k: int) -> Expr:
         """
         K[p, k] = Coefficient[-I*S[p], x^(p-k) * y^k]
+        Cached for performance.
         """
+        cache_key = (p, k)
+        if cache_key in self._K_cache:
+            return self._K_cache[cache_key]
+        
         S_p = self._S(p)
         if S_p == 0:
+            self._K_cache[cache_key] = S.Zero
             return S.Zero
         
         expr = expand(-I * S_p)
-        return self._get_coeff(expr, p - k, k)
+        result = self._get_coeff(expr, p - k, k)
+        self._K_cache[cache_key] = result
+        return result
     
     def _compute_h(self, p: int) -> List[Expr]:
         """
         h[p] = Table[If[2*k - p != 0, K[p, k]/(2*k - p), 0], {k, 0, p}]
         
         Returns list of length p+1, indexed from 0 to p.
+        Optimized: only simplify non-zero terms.
         """
+        start = time.time()
         h_list = []
         
         for k in range(p + 1):
             divisor = 2 * k - p
             if divisor != 0:
                 K_pk = self._K(p, k)
-                h_k = K_pk / divisor
-                h_k = simplify(h_k)
+                if K_pk == 0:
+                    h_k = S.Zero
+                else:
+                    h_k = K_pk / divisor
+                    if self.simplify_level >= 1:
+                        h_k = simplify(h_k)
             else:
                 h_k = S.Zero
             h_list.append(h_k)
         
         self._h[p] = h_list
+        logger.debug(f"  h[{p}] computed in {_format_time(time.time() - start)}")
         return h_list
     
     def _compute_F_at_order(self, p: int) -> Expr:
@@ -248,6 +305,8 @@ class SymbolicEngine:
         In Mathematica, {k, p+1} means k goes from 1 to p+1.
         h[p][[k]] is 1-indexed, so h[p][[k]] = h_list[k-1].
         """
+        start = time.time()
+        
         if p not in self._h:
             self._compute_h(p)
         
@@ -265,6 +324,7 @@ class SymbolicEngine:
         
         result = expand(result)
         self._F[p] = result
+        logger.debug(f"  F[{p}] computed in {_format_time(time.time() - start)}")
         return result
     
     def _V(self, p: int) -> Expr:
@@ -302,29 +362,48 @@ class SymbolicEngine:
             Symbolic expression for L_k
         """
         if k in self.lyapunov_coefficients:
+            logger.debug(f"L{k}: returning cached result")
             return self.lyapunov_coefficients[k]
         
+        start_total = time.time()
+        logger.debug(f"L{k}: starting computation (p={2*k+1})")
+        
         p = 2 * k + 1
+        
+        start_v = time.time()
         result = self._V(p)
+        elapsed_v = time.time() - start_v
+        logger.debug(f"L{k}: V[{p}] computed in {_format_time(elapsed_v)}")
+        
+        start_simp = time.time()
         result = self._simplify_expression(result)
+        elapsed_simp = time.time() - start_simp
+        logger.debug(f"L{k}: simplification in {_format_time(elapsed_simp)}")
         
         self.lyapunov_coefficients[k] = result
         self.max_computed_order = max(self.max_computed_order, k)
         
+        elapsed_total = time.time() - start_total
+        logger.info(f"L{k}: completed in {_format_time(elapsed_total)} (V: {_format_time(elapsed_v)}, simp: {_format_time(elapsed_simp)})")
+        
         return result
     
-    def _simplify_expression(self, expr: Expr) -> Expr:
+    def _simplify_expression(self, expr: Expr, force_simplify: bool = False) -> Expr:
         """Apply simplification pipeline based on simplify_level."""
-        if self.simplify_level == 0:
+        if self.simplify_level == 0 and not force_simplify:
             return expr
         
         if expr == 0:
             return S.Zero
         
         result = expand(expr)
+        
+        if result.is_number:
+            return result
+        
         result = collect(result, self.params) if self.params else result
         
-        if self.simplify_level >= 2:
+        if self.simplify_level >= 2 or force_simplify:
             result = simplify(result)
         
         if self.simplify_level >= 3:

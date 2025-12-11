@@ -167,7 +167,7 @@ O sistema calcula coeficientes de Lyapunov para sistemas planares próximos a um
 
 ### Algoritmo (Forma Normal Iterativa)
 
-Baseado na referência do Mathematica:
+Baseado na referência do Mathematica https://prp.unicamp.br/inscricao-congresso/resumos/2021P18120A35838O2645.pdf:
 
 ```
 Z[j] = aⱼ·((x+y)/2)ʲ + bⱼ·((x-y)/(2i))ʲ

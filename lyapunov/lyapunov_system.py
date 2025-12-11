@@ -133,7 +133,12 @@ class LyapunovSystem:
         """
         return self.system_def.validate()
     
-    def compute_lyapunov(self, k: int, use_cache: bool = True) -> Expr:
+    def compute_lyapunov(
+        self,
+        k: int,
+        use_cache: bool = True,
+        simplify_level: Optional[int] = None
+    ) -> Expr:
         """
         Compute the k-th Lyapunov coefficient symbolically.
         

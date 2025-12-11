@@ -114,9 +114,16 @@ def main():
             st.sidebar.error(f"❌ Erro: {e}")
     
     st.sidebar.divider()
-    st.sidebar.subheader("🗑️ Gerenciar Cache")
+    st.sidebar.subheader("⚙️ Configurações")
     
-    if st.sidebar.button("Limpar Cache"):
+    debug_mode = st.sidebar.checkbox("🐛 Modo Debug (logs no console)", value=False)
+    
+    if debug_mode:
+        import lyapunov as lyap_module
+        lyap_module.enable_debug_logging(level="DEBUG")
+        st.sidebar.info("Logs aparecerão no terminal")
+    
+    if st.sidebar.button("🗑️ Limpar Cache"):
         try:
             import shutil
             from pathlib import Path
@@ -156,13 +163,23 @@ def main():
         with col2:
             st.header("🧮 Calcular Coeficientes")
             
-            max_k = st.slider("Ordem máxima k:", 1, 5, 1)
+            max_k = st.slider("Ordem máxima k:", 1, 10, 1)
+            
+            if max_k > 5:
+                st.warning("⚠️ Ordens altas (k > 5) podem demorar alguns minutos ou até horas dependendo do sistema.")
             
             if st.button("Calcular L₁ ... Lₖ"):
-                with st.spinner("Calculando..."):
-                    for k in range(1, max_k + 1):
-                        L_k = system.compute_lyapunov(k)
-                        st.session_state.computed_coeffs[k] = L_k
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                for k in range(1, max_k + 1):
+                    status_text.text(f"Calculando L_{k}...")
+                    L_k = system.compute_lyapunov(k)
+                    st.session_state.computed_coeffs[k] = L_k
+                    progress_bar.progress(k / max_k)
+                
+                status_text.empty()
+                progress_bar.empty()
                 st.success("✅ Cálculo concluído!")
         
         if st.session_state.computed_coeffs:
