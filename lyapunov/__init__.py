@@ -12,6 +12,7 @@ from .code_generator import CCodeGenerator
 from .lyapunov_system import LyapunovSystem
 from .visualization import LyapunovVisualizer
 from .cli import LyapunovCLI
+from .analysis import EquilibriumScanner, EquilibriumPoint, EquilibriumClassifier
 
 __version__ = "2.0.0"
 __author__ = "LyapunovSolver Team"
@@ -24,6 +25,9 @@ __all__ = [
     "LyapunovSystem",
     "LyapunovVisualizer",
     "LyapunovCLI",
+    "EquilibriumScanner",
+    "EquilibriumPoint",
+    "EquilibriumClassifier",
     "enable_debug_logging",
 ]
 
