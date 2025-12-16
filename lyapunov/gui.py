@@ -167,6 +167,17 @@ def sidebar_config():
     **Aba 2 - Cálculo Direto:**
     - Sistema já na forma canônica
     - Calcula L₁, L₂, ... diretamente
+
+    **Aba 3 - 🎨 Retrato de Fase:**
+    - Defina `f(x,y)` e `g(x,y)` (e parâmetros, se houver)
+    - Ajuste janela de plot (`x_min/x_max`, `y_min/y_max`)
+    - Ative **Streamlines** (recomendado) e ajuste a **densidade**
+    - Use **Seeds controlados**:
+      - Automático: escolha do `streamplot`
+      - Grade/Borda: distribui linhas de forma previsível
+    - Para trajetórias: informe `(x0, y0)` e clique em **Adicionar trajetória**
+    - Use **Limpar** para remover as trajetórias salvas
+    - Para bifurcação: escolha o parâmetro, intervalo e número de frames e gere a sequência
     """)
     
     st.sidebar.divider()
@@ -364,6 +375,13 @@ def tab_analise_completa():
                         st.markdown(f"**Traço:** {pt.trace}")
                     if pt.determinant is not None:
                         st.markdown(f"**Det:** {pt.determinant}")
+
+                if getattr(pt, "bifurcations", None):
+                    st.divider()
+                    st.markdown("🧭 **Possíveis bifurcações (heurística):**")
+                    for b in pt.bifurcations:
+                        st.markdown(f"- **{b.name}** — {b.condition}")
+                        st.caption(b.importance)
                 
                 # Show classification reasoning
                 if pt.classification_reason:

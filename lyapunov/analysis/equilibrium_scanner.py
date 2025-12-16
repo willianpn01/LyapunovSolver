@@ -20,6 +20,14 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class BifurcationCandidate:
+    name: str
+    condition: str
+    importance: str
+    details: Optional[str] = None
+
+
+@dataclass
 class EquilibriumPoint:
     """Represents a classified equilibrium point."""
     
@@ -49,6 +57,9 @@ class EquilibriumPoint:
     # Hopf-specific
     hopf_frequency: Optional[float] = None
     is_hopf: bool = False
+
+    # Bifurcation candidates (heuristics)
+    bifurcations: List[BifurcationCandidate] = field(default_factory=list)
     
     # Metadata
     solver_method: str = "symbolic"
@@ -209,6 +220,8 @@ class EquilibriumScanner:
                     
                     # Merge with symbolic (avoid duplicates)
                     points = self._merge_solutions(points, numerical_points)
+
+        self._annotate_bifurcations(points)
         
         # Cache results
         self._cached_points = points
@@ -221,6 +234,157 @@ class EquilibriumScanner:
         self._log_summary(points)
         
         return points
+
+    def _annotate_bifurcations(self, points: List[EquilibriumPoint]) -> None:
+        for pt in points:
+            pt.bifurcations = self._detect_local_bifurcations(pt)
+
+        self._detect_transcritical_and_pitchfork(points)
+
+    def _to_float(self, expr: Any) -> Optional[float]:
+        try:
+            if expr is None:
+                return None
+            if hasattr(expr, 'evalf'):
+                return float(expr.evalf())
+            return float(expr)
+        except Exception:
+            return None
+
+    def _is_close_to_zero(self, expr: Any, tol: float = 1e-8) -> Optional[bool]:
+        val = self._to_float(expr)
+        if val is not None:
+            return abs(val) < tol
+        try:
+            return simplify(expr) == 0
+        except Exception:
+            return None
+
+    def _detect_local_bifurcations(self, pt: EquilibriumPoint) -> List[BifurcationCandidate]:
+        candidates: List[BifurcationCandidate] = []
+
+        tr = pt.trace
+        det = pt.determinant
+
+        if pt.eq_type == EquilibriumType.HOPF_CANDIDATE:
+            candidates.append(BifurcationCandidate(
+                name="Hopf",
+                condition="Tr(J) = 0, Det(J) > 0 (ω ≠ 0)",
+                importance="Geração/desaparecimento de ciclo limite (via foco fraco)"
+            ))
+
+        det_zero = self._is_close_to_zero(det)
+        tr_zero = self._is_close_to_zero(tr)
+
+        if det_zero is True and tr_zero is False:
+            candidates.append(BifurcationCandidate(
+                name="Sela-Nó",
+                condition="Det(J) = 0, Tr(J) ≠ 0",
+                importance="Criação/aniquilação de equilíbrios"
+            ))
+
+        if det_zero is True and tr_zero is True:
+            candidates.append(BifurcationCandidate(
+                name="Bogdanov–Takens",
+                condition="Tr(J) = 0 e Det(J) = 0",
+                importance="Bifurcação de codimensão 2 (organiza Hopf/Sela-Nó/órbitas)"
+            ))
+
+        return candidates
+
+    def _detect_transcritical_and_pitchfork(self, points: List[EquilibriumPoint]) -> None:
+        if len(self.params) != 1:
+            return
+
+        mu = self.params[0]
+        symbolic_points = [pt for pt in points if pt.is_symbolic]
+        if len(symbolic_points) < 2:
+            return
+
+        for i in range(len(symbolic_points)):
+            for j in range(i + 1, len(symbolic_points)):
+                p1 = symbolic_points[i]
+                p2 = symbolic_points[j]
+
+                try:
+                    dx = simplify(sp.sympify(p1.x) - sp.sympify(p2.x))
+                    dy = simplify(sp.sympify(p1.y) - sp.sympify(p2.y))
+                except Exception:
+                    continue
+
+                if dx == 0 and dy == 0:
+                    continue
+
+                try:
+                    sols = sp.solve([dx, dy], [mu], dict=True)
+                except Exception:
+                    continue
+
+                if not sols:
+                    continue
+
+                mu_val = sols[0].get(mu)
+                if mu_val is None:
+                    continue
+
+                cond = f"Dois equilíbrios colidem quando {mu} = {mu_val}"
+                for pt in (p1, p2):
+                    pt.bifurcations.append(BifurcationCandidate(
+                        name="Transcrítica",
+                        condition=cond,
+                        importance="Dois equilíbrios colidem; possível troca de estabilidade"
+                    ))
+
+        origin_pts = [pt for pt in symbolic_points if simplify(sp.sympify(pt.x)) == 0 and simplify(sp.sympify(pt.y)) == 0]
+        if not origin_pts:
+            return
+
+        for origin in origin_pts:
+            for a in symbolic_points:
+                if a is origin:
+                    continue
+                for b in symbolic_points:
+                    if b is origin or b is a:
+                        continue
+
+                    try:
+                        ax = simplify(sp.sympify(a.x))
+                        ay = simplify(sp.sympify(a.y))
+                        bx = simplify(sp.sympify(b.x))
+                        by = simplify(sp.sympify(b.y))
+                    except Exception:
+                        continue
+
+                    if simplify(ax + bx) != 0:
+                        continue
+                    if simplify(ay - by) != 0:
+                        continue
+
+                    try:
+                        sols_a = sp.solve([ax, ay], [mu], dict=True)
+                        sols_b = sp.solve([bx, by], [mu], dict=True)
+                    except Exception:
+                        continue
+
+                    if not sols_a or not sols_b:
+                        continue
+
+                    mu_a = sols_a[0].get(mu)
+                    mu_b = sols_b[0].get(mu)
+                    if mu_a is None or mu_b is None:
+                        continue
+                    if simplify(mu_a - mu_b) != 0:
+                        continue
+
+                    cond = f"x₀ = 0 e simetria (ramificações ±x) com colisão em {mu} = {mu_a}"
+                    for pt in (origin, a, b):
+                        pt.bifurcations.append(BifurcationCandidate(
+                            name="Pitchfork",
+                            condition=cond,
+                            importance="Quebra espontânea de simetria"
+                        ))
+
+                    return
     
     def _solve_numerical(
         self,

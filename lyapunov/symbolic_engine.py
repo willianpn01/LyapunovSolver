@@ -92,13 +92,17 @@ class SymbolicEngine:
         
         self._F: Dict[int, Expr] = {}
         self._h: Dict[int, List[Expr]] = {}
+        self._dF_sum_cache: Dict[int, Expr] = {}
         
         self._Z_cache: Dict[int, Expr] = {}
         self._S_cache: Dict[int, Expr] = {}
         self._K_cache: Dict[Tuple[int, int], Expr] = {}
+        self._K_coeff_map_cache: Dict[int, Optional[Dict[Tuple[int, int], Expr]]] = {}
         
         self._extract_coefficients()
         self._F[2] = self._x * self._y / 2
+
+        self._dF_sum_cache[2] = diff(self._F[2], self._x) + diff(self._F[2], self._y)
     
     def _extract_coefficients(self) -> None:
         """
@@ -185,6 +189,19 @@ class SymbolicEngine:
                 self._compute_F_at_order(p)
         
         return self._F.get(l, S.Zero)
+
+    def _get_dF_sum(self, l: int) -> Expr:
+        if l in self._dF_sum_cache:
+            return self._dF_sum_cache[l]
+
+        F_l = self._get_F(l)
+        if F_l == 0:
+            self._dF_sum_cache[l] = S.Zero
+            return S.Zero
+
+        result = diff(F_l, self._x) + diff(F_l, self._y)
+        self._dF_sum_cache[l] = result
+        return result
     
     def _Phi(self, l: int, k: int) -> Expr:
         """
@@ -194,14 +211,11 @@ class SymbolicEngine:
         if Z_k == 0:
             return S.Zero
         
-        F_l = self._get_F(l)
-        if F_l == 0:
+        dF_sum = self._get_dF_sum(l)
+        if dF_sum == 0:
             return S.Zero
-        
-        dF_dx = diff(F_l, self._x)
-        dF_dy = diff(F_l, self._y)
-        
-        return expand(Z_k * (dF_dx + dF_dy))
+
+        return expand(Z_k * dF_sum)
     
     def _S(self, p: int) -> Expr:
         """
@@ -225,31 +239,28 @@ class SymbolicEngine:
         logger.debug(f"  S[{p}] computed in {_format_time(time.time() - start)}")
         return result
     
-    def _get_coeff(self, expr: Expr, x_pow: int, y_pow: int) -> Expr:
-        """Extract coefficient of x^x_pow * y^y_pow from expr."""
-        if expr == 0:
-            return S.Zero
-        
-        expr = expand(expr)
-        
+    def _get_K_coeff_map(self, p: int) -> Optional[Dict[Tuple[int, int], Expr]]:
+        if p in self._K_coeff_map_cache:
+            return self._K_coeff_map_cache[p]
+
+        S_p = self._S(p)
+        if S_p == 0:
+            self._K_coeff_map_cache[p] = {}
+            return self._K_coeff_map_cache[p]
+
+        expr = expand(-I * S_p)
+
         try:
             poly = Poly(expr, self._x, self._y)
-            for monom, coeff in zip(poly.monoms(), poly.coeffs()):
-                if monom == (x_pow, y_pow):
-                    return coeff
-            return S.Zero
-        except:
-            pass
-        
-        try:
-            coeff = expr
-            if x_pow > 0:
-                coeff = coeff.coeff(self._x, x_pow)
-            if coeff is not None and y_pow > 0:
-                coeff = coeff.coeff(self._y, y_pow)
-            return coeff if coeff is not None else S.Zero
-        except:
-            return S.Zero
+            coeff_map: Dict[Tuple[int, int], Expr] = {}
+            for monom, coeff in poly.as_dict().items():
+                if len(monom) == 2 and (monom[0] + monom[1] == p):
+                    coeff_map[(int(monom[0]), int(monom[1]))] = coeff
+            self._K_coeff_map_cache[p] = coeff_map
+            return coeff_map
+        except Exception:
+            self._K_coeff_map_cache[p] = None
+            return None
     
     def _K(self, p: int, k: int) -> Expr:
         """
@@ -259,12 +270,18 @@ class SymbolicEngine:
         cache_key = (p, k)
         if cache_key in self._K_cache:
             return self._K_cache[cache_key]
-        
+
+        coeff_map = self._get_K_coeff_map(p)
+        if coeff_map is not None:
+            result = coeff_map.get((p - k, k), S.Zero)
+            self._K_cache[cache_key] = result
+            return result
+
         S_p = self._S(p)
         if S_p == 0:
             self._K_cache[cache_key] = S.Zero
             return S.Zero
-        
+
         expr = expand(-I * S_p)
         result = self._get_coeff(expr, p - k, k)
         self._K_cache[cache_key] = result
@@ -324,6 +341,7 @@ class SymbolicEngine:
         
         result = expand(result)
         self._F[p] = result
+        self._dF_sum_cache[p] = diff(result, self._x) + diff(result, self._y)
         logger.debug(f"  F[{p}] computed in {_format_time(time.time() - start)}")
         return result
     

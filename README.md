@@ -17,6 +17,8 @@ Biblioteca Python de alto desempenho para cálculo de coeficientes de Lyapunov u
 
 ## 📦 Instalação
 
+**Requisito:** Python **3.10+**
+
 ```bash
 # Clone o repositório
 git clone <repo-url>
@@ -34,6 +36,14 @@ pip install -r requirements.txt
 ## 🚀 Guia Rápido
 
 ### Interface Gráfica (Recomendado)
+
+**Windows (mais fácil):**
+
+```bat
+run_gui_windows.bat
+```
+
+**Linux/Mac (ou Windows manual):**
 
 ```bash
 streamlit run lyapunov/gui.py
